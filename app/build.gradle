@@ -10,8 +10,8 @@ android {
         applicationId 'com.example.obbinstaller'
         minSdk 21
         targetSdk 29
-        versionCode 8
-        versionName '2.0.3'
+        versionCode 9
+        versionName '2.0.4'
     }
 
     buildTypes {

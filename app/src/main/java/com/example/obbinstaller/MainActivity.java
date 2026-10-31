@@ -51,7 +51,6 @@ public class MainActivity extends Activity {
     ProgressBar pb;
     private boolean started = false;
     private boolean storagePermissionRequested = false;
-    TextView logView;
     private volatile Runnable pendingAfterInstall;
     private volatile String pendingPackageName;
 
@@ -168,9 +167,6 @@ public class MainActivity extends Activity {
         Button logButton = new Button(this);
         logButton.setText("复制诊断日志");
         logButton.setOnClickListener(v -> copyDiagnosticLog());
-        logView = new TextView(this);
-        logView.setTextIsSelectable(true);
-        logView.setTextSize(11);
         LinearLayout ll = new LinearLayout(this);
         ll.setOrientation(LinearLayout.VERTICAL);
         ll.setPadding(40, 40, 40, 40);
@@ -178,7 +174,6 @@ public class MainActivity extends Activity {
         ll.addView(pb);
         ll.addView(btn);
         ll.addView(logButton);
-        ll.addView(logView);
         ScrollView scroll = new ScrollView(this);
         scroll.addView(ll);
         setContentView(scroll);
@@ -192,22 +187,19 @@ public class MainActivity extends Activity {
 
     void logDiagnostic(String message) {
         String line = System.currentTimeMillis() + " | " + message + "\n";
-        String snapshot;
         synchronized (logLock) {
             diagnosticLog.append(line);
-            snapshot = diagnosticLog.toString();
             try (FileOutputStream out = new FileOutputStream(diagnosticFile(), true)) {
                 out.write(line.getBytes(StandardCharsets.UTF_8));
             } catch (Exception ignored) {}
         }
-        if (logView != null) runOnUiThread(() -> logView.setText(snapshot));
     }
 
     void logEnvironment() {
         int writePermission = Build.VERSION.SDK_INT < 23
                 ? PackageManager.PERMISSION_GRANTED
                 : checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        logDiagnostic("appVersion=2.0.3(8), sdk=" + Build.VERSION.SDK_INT
+        logDiagnostic("appVersion=2.0.4(9), sdk=" + Build.VERSION.SDK_INT
                 + ", android=" + Build.VERSION.RELEASE
                 + ", device=" + Build.MANUFACTURER + " " + Build.MODEL
                 + ", targetSdk=" + getApplicationInfo().targetSdkVersion);
