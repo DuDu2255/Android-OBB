@@ -31,7 +31,7 @@ tasks.register('generatePayloadDex') {
             commandLine "${android.sdkDirectory}/build-tools/34.0.0/d8",
                     '--min-api', '21',
                     '--output', output.absolutePath,
-                    "${rootProject.projectDir}/payload/build/intermediates/javac/debug/classes"
+                    "${rootProject.projectDir}/payload/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes"
         }
     }
 }
