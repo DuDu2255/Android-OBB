@@ -288,7 +288,7 @@ public class MainActivity extends Activity {
         int packageStatus = data == null ? Integer.MIN_VALUE
                 : data.getIntExtra(PackageInstaller.EXTRA_STATUS, Integer.MIN_VALUE);
         int legacyStatus = data == null ? Integer.MIN_VALUE
-                : data.getIntExtra(Intent.EXTRA_INSTALL_RESULT, Integer.MIN_VALUE);
+                : data.getIntExtra("android.intent.extra.INSTALL_RESULT", Integer.MIN_VALUE);
         String statusMessage = data == null ? null
                 : data.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
         logDiagnostic("installResult: resultCode=" + resultCode + ", package=" + packageName
