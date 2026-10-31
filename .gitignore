@@ -1,0 +1,12 @@
+# 大文件 / 构建产物不入库
+*.apk
+*.obb
+*.keystore
+installer_build/
+demo_extracted/
+extracted/
+pure/
+_exassets/
+*集成版*
+com.YandereDev.*
+demo_game.apk

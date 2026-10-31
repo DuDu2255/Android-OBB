@@ -1,0 +1,111 @@
+# 整合包（APK + OBB 单包）打包框架说明
+========================================
+仿"虫虫助手"做法：把一个完整游戏 APK 和它的 OBB 数据包，
+合并进【一个】外壳 APK，用户下载/安装这一个文件即可，无需单独处理 OBB。
+
+
+## 一、原理（为什么能"连 OBB 一起打包"）
+------------------------------------------------
+Android 的 OBB（Opaque Binary Blob）本来要放在：
+    /sdcard/Android/obb/<包名>/main.<版本>. <包名>.obb
+游戏运行时去这个固定路径读数据。
+
+"单包"的思路是把 OBB 当作普通文件塞进 APK 的 assets/ 里，
+再在外壳里（或安装器里）于首次运行时把它"解"到上面的系统路径。
+关键在于：
+  1. OBB 以 ZIP_STORED（不压缩）存入 assets/，避免二次压缩 + 支持大文件流式提取；
+  2. assets 里的路径直接【镜像】目标路径：
+     assets/sdcard/Android/obb/<包名>/main.x.obb
+     → 去掉 "assets/" 前缀就是 /sdcard/Android/obb/<包名>/main.x.obb；
+  3. 真正的游戏 APK 作为第二个 asset（约定名 assets/infoplay）一起打包。
+
+最终的整合 APK 结构：
+    外壳 APK
+    ├── assets/infoplay                                   ← 真正的游戏 APK
+    └── assets/sdcard/Android/obb/<包名>/main.x.<包名>.obb ← OBB 数据
+
+
+## 二、完整流程（端到端）
+------------------------------------------------
+准备材料
+  A. 游戏本体 APK          （game.apk）
+  B. OBB 数据文件          （main.<ver>.<包名>.obb / patch.<ver>.<包名>.obb）
+  C. 游戏包名              （如 com.example.game，必须和 OBB 文件名里的包名一致）
+
+步骤 1  打包（PC 端，本框架脚本）
+        python3 build_integrated.py \
+            --game game.apk \
+            --obb  main.1.com.example.game.obb \
+            --package com.example.game \
+            --out  integrated.apk
+        → 生成 integrated.apk（外壳 APK，内含上面两个 asset，均无压缩）
+
+步骤 2  分发 / 安装
+        通过侧载市场或 adb install 装到设备。
+        注意：Google Play 限制 APK 100/150MB 且走 AAB，这种方式只适用于
+        自有分发 / 第三方侧载市场，不适用于上架 Play。
+
+步骤 3  设备端"解压中"（关键，也就是虫虫点安装后转圈的那一步）
+        外壳本身不是能直接玩的游戏，需要把内含的两样东西"释放"出来：
+          · assets/infoplay          → 安装为真正的游戏 APK
+          · assets/sdcard/Android/obb/<包名>/main.x.obb
+                                     → 写出到 /sdcard/Android/obb/<包名>/
+        这一步在虫虫助手界面显示为"解压中"，本质是：
+          把壳 APK 里藏的几 GB 的 OBB 数据流式复制（拷贝）到存储卡的
+          Android/obb/<包名>/ 目录，再把游戏 APK 安装上。
+        所以大游戏会转很久，且期间外壳文件和正在写出的 OBB 会短暂"同时存在"，
+        务必留够约等于 OBB 大小的空闲空间，不要切后台杀进程。
+        释放方式二选一：
+          a) 在壳 APK 内放一个引导 Activity/Service，首次启动自动解包；
+          b) 由外部安装器（如虫虫助手客户端 / extract_on_device.sh）解包。
+        本框架提供 extract_on_device.sh（Termux / adb 环境可直接用）。
+
+步骤 4  运行
+        游戏像往常一样去 /sdcard/Android/obb/<包名>/ 读数据，体验无差异。
+
+
+## 三、脚本清单
+------------------------------------------------
+build_integrated.py    打包：生成 外壳 APK（含 infoplay + OBB）
+repack_real.py         从已有的整合 APK 流式重打包（验证/复用真实素材，不落临时文件）
+extract_integrated.py  PC 端校验：从整合 APK 解包出游戏和 OBB 看结构
+extract_on_device.sh   设备端：把 OBB 释放到系统路径并安装游戏
+
+
+## 四、使用方法
+------------------------------------------------
+1) 从游戏 APK + OBB 打包
+   python3 build_integrated.py --game 游戏.apk --obb 数据.obb \
+       --package 游戏包名 --out 整合包.apk
+
+2) 从已有的整合包重新打包（本目录真实素材用法）
+   python3 repack_real.py 原整合包.apk 输出.apk 游戏包名
+   例：python3 repack_real.py \
+       com.YandereDev.YanlessFATAS_3.0.apk \
+       YanlessFATAS_集成版.apk \
+       com.YandereDev.YanlessFATAS
+
+3) PC 端校验结构
+   python3 extract_integrated.py --apk 整合包.apk --out out_dir
+   # 会得到 out_dir/game_extracted.apk 和 out_dir/obb_mirror/sdcard/Android/obb/...
+
+4) 设备端释放（Termux 或 adb shell，需存储权限/root）
+   sh extract_on_device.sh 整合包.apk 游戏包名
+
+
+## 五、注意事项 / 坑
+------------------------------------------------
+· 必须用 ZIP_STORED（不压缩）。用 deflate 会让 3GB+ 文件二次压缩且无法流式读取。
+· OBB 文件名必须保持 main.<ver>.<包名>.obb 规范，否则游戏识别不到。
+· OBB 必须落到 /sdcard/Android/obb/<包名>/，包名错一个字都读不到。
+· 写 obb 目录需要存储权限（或 root），首次运行要申请。
+· 整合 APK 体积 = 游戏 + OBB，通常很大（数 GB），只适合侧载/离线分发。
+· 本框架是通用打包工具，请仅用于你拥有分发权的游戏/资源。
+
+
+## 六、本目录已有素材与产物
+------------------------------------------------
+com.YandereDev.YanlessFATAS_3.0.apk   真实整合包（已验证：内含 infoplay + 3.8GB OBB）
+                                        —— 它本身就是虫虫这种格式，可直接用于步骤 3 安装
+YanlessFATAS_集成版.apk               用本框架 repack_real.py 重打包出的干净集成包
+demo_game.apk / main.1.com.example.demo.obb / demo_integrated.apk  演示用最小样例

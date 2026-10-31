@@ -1,0 +1,13 @@
+apply plugin: 'com.android.application'
+android {
+    compileSdk 33
+    defaultConfig {
+        applicationId "com.example.obbinstaller"
+        minSdk 21
+        targetSdk 33
+    }
+    buildTypes { release { minifyEnabled false } }
+}
+dependencies {
+    implementation 'androidx.core:core:1.12.0'
+}
