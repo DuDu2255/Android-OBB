@@ -44,8 +44,13 @@ public class MainActivity extends Activity {
         Thread.setDefaultUncaughtExceptionHandler((th, ex) -> runOnUiThread(() -> showError(ex)));
 
         if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) {
-            // 未授予「所有文件访问」权限：打开安装器时先弹窗询问，确认后再跳系统设置页
-            showAllFilesPermissionDialog();
+            // 未授予「所有文件访问」权限：若用户曾选过"禁止且不再询问"则不再弹窗，直接提示去设置手动开启
+            boolean noAsk = getSharedPreferences("prefs", MODE_PRIVATE).getBoolean("no_ask_all_files", false);
+            if (noAsk) {
+                setStatus("尚未授予「所有文件访问」权限（你之前选择不再询问）。\n请到系统设置 → 应用 → 本应用 → 权限，手动开启「所有文件访问」后重开本程序。");
+            } else {
+                showAllFilesPermissionDialog();
+            }
             return;
         }
         new Thread(this::installBundled).start();
@@ -76,12 +81,15 @@ public class MainActivity extends Activity {
     }
 
     void showAllFilesPermissionDialog() {
-        // 打开安装器时弹出：是否允许「管理所有文件」权限
+        // 打开安装器时弹出：允许 / 禁止(不再询问)「管理所有文件」权限
         AlertDialog.Builder b = new AlertDialog.Builder(this);
         b.setTitle("需要「管理所有文件」权限");
-        b.setMessage("本工具需要把 OBB 写入 /Android/obb 目录，必须授予「所有文件访问」权限才能继续。\n\n是否前往系统设置开启？");
-        b.setPositiveButton("去开启", (d, w) -> openAllFilesSettings());
-        b.setNegativeButton("退出", (d, w) -> finish());
+        b.setMessage("本工具需要把 OBB 写入 /Android/obb 目录，必须授予「所有文件访问」权限才能继续。\n\n是否允许前往系统设置开启？");
+        b.setPositiveButton("允许（去开启）", (d, w) -> openAllFilesSettings());
+        b.setNegativeButton("禁止，不再询问", (d, w) -> {
+            getSharedPreferences("prefs", MODE_PRIVATE).edit().putBoolean("no_ask_all_files", true).apply();
+            finish();
+        });
         b.setCancelable(false);
         b.show();
     }
