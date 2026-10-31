@@ -17,6 +17,7 @@ import android.widget.ProgressBar;
 import android.widget.TextView;
 import androidx.core.content.FileProvider;
 import java.io.File;
+import java.io.IOException;
 import java.io.FileOutputStream;
 import java.io.InputStream;
 import java.io.OutputStream;
@@ -26,6 +27,7 @@ import java.util.List;
 public class MainActivity extends Activity {
     static final String AUTHORITY = "com.example.obbinstaller.fileprovider";
     static final int REQ_PICK = 1001;
+    static final int REQ_PERM = 1002;
     TextView tv;
     ProgressBar pb;
 
@@ -44,12 +46,12 @@ public class MainActivity extends Activity {
             Intent i = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION,
                     Uri.parse("package:" + getPackageName()));
             if (i.resolveActivity(getPackageManager()) != null) {
-                try { startActivity(i); } catch (Throwable t) { showError(t); return; }
+                try { startActivityForResult(i, REQ_PERM); } catch (Throwable t) { showError(t); return; }
             } else {
                 setStatus("无法打开“所有文件访问”设置页，请手动到系统设置授予本应用“所有文件访问”权限后重开。");
                 return;
             }
-            toast("请授予「所有文件访问」权限后重开本程序");
+            toast("请在此页面授予「所有文件访问」权限，返回后会自动继续");
             return;
         }
         new Thread(this::installBundled).start();
@@ -88,6 +90,16 @@ public class MainActivity extends Activity {
     }
 
     protected void onActivityResult(int req, int res, Intent data) {
+        if (req == REQ_PERM) {
+            // 从「所有文件访问」设置页返回：若已授权则自动继续安装，否则提示。
+            if (safeIsExternalStorageManager()) {
+                setStatus("已获得权限，开始处理...");
+                new Thread(this::installBundled).start();
+            } else {
+                setStatus("尚未授予「所有文件访问」权限，无法写入 OBB 目录。请到系统设置手动授予后重开本程序。");
+            }
+            return;
+        }
         if (req == REQ_PICK && res == RESULT_OK && data != null) {
             List<Uri> uris = new ArrayList<>();
             if (data.getData() != null) uris.add(data.getData());
@@ -99,10 +111,17 @@ public class MainActivity extends Activity {
         } else super.onActivityResult(req, res, data);
     }
 
+    String extRoot() {
+        // 用系统 API 取真实外置存储根目录（通常是 /storage/emulated/0），
+        // 不要硬编码 /sdcard（只是 symlink，某些设备上应用进程建目录会失败）。
+        return Environment.getExternalStorageDirectory().getAbsolutePath();
+    }
+
     String obbDest(String nameOrPath) {
+        String root = extRoot();
         if (nameOrPath.contains("sdcard/Android/obb/")) {
             int i = nameOrPath.indexOf("sdcard/Android/obb/");
-            return "/" + nameOrPath.substring(i);
+            return root + "/Android/obb/" + nameOrPath.substring(i + "sdcard/Android/obb/".length());
         }
         int first = nameOrPath.indexOf('.');
         if (first >= 0) {
@@ -110,10 +129,10 @@ public class MainActivity extends Activity {
             if (second >= 0 && (nameOrPath.startsWith("main.") || nameOrPath.startsWith("patch."))) {
                 String pkg = nameOrPath.substring(second + 1);
                 if (pkg.endsWith(".obb")) pkg = pkg.substring(0, pkg.length() - 4);
-                return "/sdcard/Android/obb/" + pkg + "/" + nameOrPath;
+                return root + "/Android/obb/" + pkg + "/" + nameOrPath;
             }
         }
-        return "/sdcard/Android/obb/" + nameOrPath + "/" + nameOrPath;
+        return root + "/Android/obb/" + nameOrPath + "/" + nameOrPath;
     }
 
     void installBundled() {
@@ -196,7 +215,9 @@ public class MainActivity extends Activity {
     }
 
     void copyAsset(AssetManager am, String asset, File out) throws Exception {
-        out.getParentFile().mkdirs();
+        File parent = out.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs())
+            throw new IOException("无法创建目录: " + parent + "（请确认已授予本应用「所有文件访问」权限，且存储可写）");
         long total = -1;
         try { total = am.openFd(asset).getLength(); } catch (Exception ignored) {}
         InputStream in = am.open(asset);
@@ -205,7 +226,9 @@ public class MainActivity extends Activity {
         in.close(); fo.close();
     }
     void copyUri(Uri u, File out) throws Exception {
-        out.getParentFile().mkdirs();
+        File parent = out.getParentFile();
+        if (parent != null && !parent.exists() && !parent.mkdirs())
+            throw new IOException("无法创建目录: " + parent + "（请确认已授予本应用「所有文件访问」权限，且存储可写）");
         long total = -1;
         try { total = getContentResolver().openFileDescriptor(u, "r").getStatSize(); } catch (Exception ignored) {}
         InputStream in = getContentResolver().openInputStream(u);
