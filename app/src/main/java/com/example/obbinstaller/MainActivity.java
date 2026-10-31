@@ -46,7 +46,7 @@ public class MainActivity extends Activity {
             if (i.resolveActivity(getPackageManager()) != null) {
                 try { startActivity(i); } catch (Throwable t) { showError(t); return; }
             } else {
-                setStatus("无法打开"所有文件访问"设置页，请手动到系统设置授予本应用"所有文件访问"权限后重开。");
+                setStatus("无法打开“所有文件访问”设置页，请手动到系统设置授予本应用“所有文件访问”权限后重开。");
                 return;
             }
             toast("请授予「所有文件访问」权限后重开本程序");
