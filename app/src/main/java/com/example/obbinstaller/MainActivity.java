@@ -16,6 +16,7 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.OpenableColumns;
+import android.provider.DocumentsContract;
 import android.system.ErrnoException;
 import android.system.Os;
 import android.provider.Settings;
@@ -24,6 +25,7 @@ import android.widget.LinearLayout;
 import android.widget.ProgressBar;
 import android.widget.ScrollView;
 import android.widget.TextView;
+import androidx.documentfile.provider.DocumentFile;
 import androidx.core.content.FileProvider;
 import java.io.File;
 import java.io.IOException;
@@ -39,6 +41,7 @@ public class MainActivity extends Activity {
     static final int REQ_PICK = 1001;
     static final int REQ_INSTALL = 1002;
     static final int REQ_STORAGE = 1003;
+    static final int REQ_OBB_TREE = 1004;
     TextView tv;
     ProgressBar pb;
     private boolean started = false;
@@ -47,6 +50,7 @@ public class MainActivity extends Activity {
     private volatile Runnable pendingAfterInstall;
     private volatile String pendingPackageName;
 
+    private volatile List<Uri> pendingSafObbs;
     private final Object logLock = new Object();
     private final StringBuilder diagnosticLog = new StringBuilder();
     protected void onCreate(Bundle b) {
@@ -168,7 +172,7 @@ public class MainActivity extends Activity {
         int writePermission = Build.VERSION.SDK_INT < 23
                 ? PackageManager.PERMISSION_GRANTED
                 : checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        logDiagnostic("appVersion=1.2(3), sdk=" + Build.VERSION.SDK_INT
+        logDiagnostic("appVersion=1.3(4), sdk=" + Build.VERSION.SDK_INT
                 + ", android=" + Build.VERSION.RELEASE
                 + ", device=" + Build.MANUFACTURER + " " + Build.MODEL
                 + ", targetSdk=" + getApplicationInfo().targetSdkVersion);
@@ -255,6 +259,18 @@ public class MainActivity extends Activity {
             new Thread(() -> handlePicked(uris)).start();
         } else if (req == REQ_INSTALL) {
             new Thread(() -> finishInstall(res)).start();
+        } else if (req == REQ_OBB_TREE && res == RESULT_OK && data != null && data.getData() != null) {
+            Uri treeUri = data.getData();
+            int flags = data.getFlags()
+                    & (Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION);
+            try { getContentResolver().takePersistableUriPermission(treeUri, flags); }
+            catch (Exception e) { logDiagnostic("takeTreePermission failed: " + e); }
+            List<Uri> obbs = pendingSafObbs;
+            pendingSafObbs = null;
+            new Thread(() -> copyPickedObbsWithSaf(obbs, treeUri)).start();
+        } else if (req == REQ_OBB_TREE) {
+            pendingSafObbs = null;
+            setStatus("未授权 OBB 目录，无法继续复制。");
         } else super.onActivityResult(req, res, data);
     }
 
@@ -402,7 +418,104 @@ public class MainActivity extends Activity {
                 obbMsg = f.getParent();
             }
             setStatus("完成：游戏已安装" + (obbMsg.isEmpty() ? "，未选择 OBB。" : ("，OBB 已复制到 " + obbMsg)));
-        } catch (Exception e) { setStatus("游戏已安装，但复制 OBB 出错：" + e); }
+        } catch (Exception e) {
+            logDiagnostic("direct OBB copy failed: " + e);
+            requestSafObbAccess(obbs);
+        }
+    }
+
+    void requestSafObbAccess(List<Uri> obbs) {
+        pendingSafObbs = new ArrayList<>(obbs);
+        setStatus("直接写入被系统拒绝。请在目录选择器中打开“内部存储/Android/obb”，"
+                + "然后点击“使用此文件夹”。");
+        runOnUiThread(() -> {
+            try {
+                Intent intent = new Intent(Intent.ACTION_OPEN_DOCUMENT_TREE);
+                intent.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION
+                        | Intent.FLAG_GRANT_WRITE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+                        | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                if (Build.VERSION.SDK_INT >= 26) {
+                    Uri initial = DocumentsContract.buildDocumentUri(
+                            "com.android.externalstorage.documents", "primary:Android/obb");
+                    intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial);
+                }
+                startActivityForResult(intent, REQ_OBB_TREE);
+            } catch (Throwable t) {
+                pendingSafObbs = null;
+                setStatus("无法打开系统目录授权器：" + t);
+            }
+        });
+    }
+
+    void copyPickedObbsWithSaf(List<Uri> obbs, Uri treeUri) {
+        if (obbs == null || obbs.isEmpty()) {
+            setStatus("没有待复制的 OBB 文件。");
+            return;
+        }
+        try {
+            DocumentFile selected = DocumentFile.fromTreeUri(this, treeUri);
+            if (selected == null || !selected.canWrite()) {
+                throw new IOException("所选目录不可写：" + treeUri);
+            }
+            logDiagnostic("SAF selected: uri=" + treeUri + ", name=" + selected.getName()
+                    + ", canWrite=" + selected.canWrite());
+            for (Uri source : obbs) {
+                String name = docName(source);
+                String pkg = obbPackage(name);
+                if (pkg == null) throw new IOException("无法从 OBB 文件名识别包名：" + name);
+                DocumentFile packageDir = resolveSafPackageDir(selected, pkg);
+                DocumentFile old = packageDir.findFile(name);
+                if (old != null && !old.delete()) {
+                    throw new IOException("无法覆盖已有 OBB：" + name);
+                }
+                DocumentFile destination = packageDir.createFile("application/octet-stream", name);
+                if (destination == null) throw new IOException("无法创建 OBB 文件：" + name);
+                long total = -1;
+                try { total = getContentResolver().openFileDescriptor(source, "r").getStatSize(); }
+                catch (Exception ignored) {}
+                logDiagnostic("SAF copy: source=" + source + ", destination="
+                        + destination.getUri() + ", size=" + total);
+                try (InputStream in = getContentResolver().openInputStream(source);
+                     OutputStream out = getContentResolver().openOutputStream(destination.getUri(), "w")) {
+                    if (in == null || out == null) throw new IOException("无法打开 OBB 输入或输出流");
+                    pipe(in, out, total);
+                }
+            }
+            setStatus("完成：已通过系统目录授权复制 OBB。");
+        } catch (Exception e) {
+            setStatus("系统目录授权写入仍然失败：" + e);
+        }
+    }
+
+    DocumentFile resolveSafPackageDir(DocumentFile selected, String pkg) throws IOException {
+        String selectedName = selected.getName();
+        if (pkg.equals(selectedName)) return selected;
+        DocumentFile base = selected;
+        if (!"obb".equalsIgnoreCase(selectedName)) {
+            if ("Android".equalsIgnoreCase(selectedName)) base = findOrCreateDirectory(base, "obb");
+            else {
+                DocumentFile android = base.findFile("Android");
+                if (android != null && android.isDirectory()) base = findOrCreateDirectory(android, "obb");
+            }
+        }
+        return findOrCreateDirectory(base, pkg);
+    }
+
+    DocumentFile findOrCreateDirectory(DocumentFile parent, String name) throws IOException {
+        DocumentFile child = parent.findFile(name);
+        if (child != null && child.isDirectory()) return child;
+        child = parent.createDirectory(name);
+        if (child == null) throw new IOException("无法通过目录授权创建：" + name);
+        return child;
+    }
+
+    String obbPackage(String name) {
+        int first = name.indexOf('.');
+        int second = first < 0 ? -1 : name.indexOf('.', first + 1);
+        if (second < 0 || !(name.startsWith("main.") || name.startsWith("patch."))) return null;
+        String pkg = name.substring(second + 1);
+        return pkg.endsWith(".obb") ? pkg.substring(0, pkg.length() - 4) : pkg;
     }
 
     String docName(Uri u) {
