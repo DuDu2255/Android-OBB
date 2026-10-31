@@ -1,0 +1,12 @@
+plugins {
+    id 'com.android.library' version '8.2.0'
+}
+
+android {
+    namespace 'com.example.obbpayload'
+    compileSdk 34
+
+    defaultConfig {
+        minSdk 21
+    }
+}

@@ -42,6 +42,7 @@ public class MainActivity extends Activity {
     static final int REQ_INSTALL = 1002;
     static final int REQ_STORAGE = 1003;
     static final int REQ_OBB_TREE = 1004;
+    static final int REQ_UNINSTALL = 1005;
     TextView tv;
     ProgressBar pb;
     private boolean started = false;
@@ -51,6 +52,9 @@ public class MainActivity extends Activity {
     private volatile String pendingPackageName;
 
     private volatile List<Uri> pendingSafObbs;
+    private volatile File pendingPatchedApk;
+    private volatile String pendingPatchedPackage;
+    private volatile List<Uri> pendingPatchedObbs;
     private final Object logLock = new Object();
     private final StringBuilder diagnosticLog = new StringBuilder();
     protected void onCreate(Bundle b) {
@@ -172,7 +176,7 @@ public class MainActivity extends Activity {
         int writePermission = Build.VERSION.SDK_INT < 23
                 ? PackageManager.PERMISSION_GRANTED
                 : checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        logDiagnostic("appVersion=1.3(4), sdk=" + Build.VERSION.SDK_INT
+        logDiagnostic("appVersion=2.0(5), sdk=" + Build.VERSION.SDK_INT
                 + ", android=" + Build.VERSION.RELEASE
                 + ", device=" + Build.MANUFACTURER + " " + Build.MODEL
                 + ", targetSdk=" + getApplicationInfo().targetSdkVersion);
@@ -271,6 +275,8 @@ public class MainActivity extends Activity {
         } else if (req == REQ_OBB_TREE) {
             pendingSafObbs = null;
             setStatus("未授权 OBB 目录，无法继续复制。");
+        } else if (req == REQ_UNINSTALL) {
+            new Thread(this::continueAfterUninstall).start();
         } else super.onActivityResult(req, res, data);
     }
 
@@ -400,8 +406,98 @@ public class MainActivity extends Activity {
                 setStatus("未选择游戏 APK，无法先安装游戏再复制 OBB。");
                 return;
             }
-            installApk(apk, () -> copyPickedObbs(obbs));
+            setStatus("正在修补游戏 APK，使游戏能够写入自己的 OBB 目录...");
+            GameApkPatcher.Result patched = new GameApkPatcher(
+                    this, message -> logDiagnostic("PATCH: " + message)).patch(apk);
+            preparePatchedInstall(patched, obbs);
         } catch (Exception e) { setStatus("出错：" + e); }
+    }
+
+    void preparePatchedInstall(GameApkPatcher.Result patched, List<Uri> obbs) {
+        pendingPatchedApk = patched.apk;
+        pendingPatchedPackage = patched.packageName;
+        pendingPatchedObbs = new ArrayList<>(obbs);
+        if (isPackageInstalled(patched.packageName)) {
+            setStatus("修补版使用新签名。请确认卸载当前游戏；卸载完成后会自动安装修补版。");
+            runOnUiThread(() -> {
+                try {
+                    Intent uninstall = new Intent(Intent.ACTION_DELETE,
+                            Uri.parse("package:" + patched.packageName));
+                    uninstall.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+                    startActivityForResult(uninstall, REQ_UNINSTALL);
+                } catch (Throwable t) {
+                    setStatus("无法调起卸载：" + t);
+                }
+            });
+        } else {
+            installPendingPatchedApk();
+        }
+    }
+
+    void continueAfterUninstall() {
+        String packageName = pendingPatchedPackage;
+        if (packageName != null && isPackageInstalled(packageName)) {
+            setStatus("原游戏仍然存在，无法安装不同签名的修补版。");
+            return;
+        }
+        installPendingPatchedApk();
+    }
+
+    void installPendingPatchedApk() {
+        File apk = pendingPatchedApk;
+        String packageName = pendingPatchedPackage;
+        List<Uri> obbs = pendingPatchedObbs;
+        if (apk == null || packageName == null || obbs == null) {
+            setStatus("修补安装状态已丢失，请重新选择 APK 和 OBB。");
+            return;
+        }
+        installApk(apk, () -> {
+            pendingPatchedApk = null;
+            pendingPatchedPackage = null;
+            pendingPatchedObbs = null;
+            launchPatchedGame(packageName, obbs);
+        });
+    }
+
+    boolean isPackageInstalled(String packageName) {
+        if (packageName == null) return false;
+        try {
+            getPackageManager().getPackageInfo(packageName, 0);
+            return true;
+        } catch (Exception ignored) {
+            return false;
+        }
+    }
+
+    void launchPatchedGame(String packageName, List<Uri> obbs) {
+        try {
+            Intent launch = getPackageManager().getLaunchIntentForPackage(packageName);
+            if (launch == null) throw new IOException("找不到修补版游戏的启动 Activity");
+            String[] names = new String[obbs.size()];
+            ClipData clip = null;
+            for (int i = 0; i < obbs.size(); i++) {
+                Uri uri = obbs.get(i);
+                names[i] = docName(uri);
+                ClipData.Item item = new ClipData.Item(uri);
+                if (clip == null) {
+                    clip = new ClipData("OBB", new String[]{"application/octet-stream"}, item);
+                } else {
+                    clip.addItem(item);
+                }
+            }
+            if (clip == null) throw new IOException("未选择 OBB 文件");
+            launch.setAction("com.example.obbinstaller.INSTALL_OBB");
+            launch.setClipData(clip);
+            launch.putExtra("com.example.obbinstaller.OBB_NAMES", names);
+            launch.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+            logDiagnostic("launchPatchedGame: package=" + packageName + ", obbCount=" + obbs.size());
+            runOnUiThread(() -> {
+                setStatus("修补版已安装，正在由游戏自身复制 OBB...");
+                startActivity(launch);
+            });
+        } catch (Exception e) {
+            setStatus("无法启动修补版写入 OBB：" + e);
+        }
     }
 
     void copyPickedObbs(List<Uri> obbs) {
