@@ -17,8 +17,11 @@ jobs:
           java-version: 17
       - name: Setup Android SDK
         uses: android-actions/setup-android@v3
-      - name: Accept licenses
-        run: yes | sdkmanager --licenses || true
+      - name: Accept licenses and install SDK components
+        run: |
+          SDK="${ANDROID_HOME:-$HOME/android-sdk}"
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
+          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-33" "build-tools;33.0.2" "platform-tools" >/dev/null
       - name: Build Debug APK
         uses: gradle/gradle-build-action@v3
         with:
