@@ -19,12 +19,12 @@ jobs:
         run: |
           SDK=/usr/local/lib/android/sdk
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
-          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-33" "build-tools;34.0.0" "platform-tools"
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-34" "build-tools;34.0.0" "platform-tools"
           echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
       - name: Build Debug APK
         uses: gradle/gradle-build-action@v3
         with:
-          gradle-version: 8.1
+          gradle-version: 8.2
           arguments: :app:assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
