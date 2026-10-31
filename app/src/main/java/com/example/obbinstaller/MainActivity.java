@@ -28,9 +28,9 @@ import java.util.List;
 public class MainActivity extends Activity {
     static final String AUTHORITY = "com.example.obbinstaller.fileprovider";
     static final int REQ_PICK = 1001;
-    static final int REQ_PERM = 1002;
     TextView tv;
     ProgressBar pb;
+    private boolean started = false;
 
     protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -44,16 +44,22 @@ public class MainActivity extends Activity {
         Thread.setDefaultUncaughtExceptionHandler((th, ex) -> runOnUiThread(() -> showError(ex)));
 
         if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) {
-            // 未授予「所有文件访问」权限：若用户曾选过"禁止且不再询问"则不再弹窗，直接提示去设置手动开启
-            boolean noAsk = getSharedPreferences("prefs", MODE_PRIVATE).getBoolean("no_ask_all_files", false);
-            if (noAsk) {
-                setStatus("尚未授予「所有文件访问」权限（你之前选择不再询问）。\n请到系统设置 → 应用 → 本应用 → 权限，手动开启「所有文件访问」后重开本程序。");
-            } else {
-                showAllFilesPermissionDialog();
-            }
+            // 未授予「所有文件访问」权限：弹出询问框，确认后跳系统设置页；启动逻辑交给 onResume 统一处理
+            showAllFilesPermissionDialog();
             return;
         }
-        new Thread(this::installBundled).start();
+        // 已授权（或 Android 10 及以下）：交给 onResume 启动安装
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        // Winlator 同款思路：从设置页返回后再次检查；已获权限则启动安装（仅一次），未获授权则等待用户去设置
+        if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) return;
+        if (!started) {
+            started = true;
+            new Thread(this::installBundled).start();
+        }
     }
 
     void setupUi() {
@@ -81,25 +87,28 @@ public class MainActivity extends Activity {
     }
 
     void showAllFilesPermissionDialog() {
-        // 打开安装器时弹出：允许 / 禁止(不再询问)「管理所有文件」权限
+        // 打开安装器时弹出：是否前往系统设置授予「管理所有文件」权限（不再有「禁止不再询问」记忆）
         AlertDialog.Builder b = new AlertDialog.Builder(this);
         b.setTitle("需要「管理所有文件」权限");
-        b.setMessage("本工具需要把 OBB 写入 /Android/obb 目录，必须授予「所有文件访问」权限才能继续。\n\n是否允许前往系统设置开启？");
+        b.setMessage("本工具需要把 OBB 写入 /Android/obb 目录，必须授予「所有文件访问」权限才能继续。\n\n是否前往系统设置开启？");
         b.setPositiveButton("允许（去开启）", (d, w) -> openAllFilesSettings());
-        b.setNegativeButton("禁止，不再询问", (d, w) -> {
-            getSharedPreferences("prefs", MODE_PRIVATE).edit().putBoolean("no_ask_all_files", true).apply();
-            finish();
-        });
+        b.setNegativeButton("退出", (d, w) -> finish());
         b.setCancelable(false);
         b.show();
     }
 
     void openAllFilesSettings() {
-        Intent i = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION,
-                Uri.parse("package:" + getPackageName()));
-        if (i.resolveActivity(getPackageManager()) != null) {
-            try { startActivityForResult(i, REQ_PERM); } catch (Throwable t) { showError(t); }
-        } else {
+        // Winlator 同款：优先跳到本应用的「所有文件访问」设置页（更精准），失败则跳总设置页
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_APP_ALL_FILES_ACCESS_PERMISSION);
+            intent.setData(Uri.parse("package:" + getPackageName()));
+            startActivity(intent);
+            return;
+        } catch (Throwable ignored) {}
+        try {
+            Intent intent = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION);
+            startActivity(intent);
+        } catch (Throwable t) {
             setStatus("无法打开“所有文件访问”设置页，请手动到系统设置授予本应用“所有文件访问”权限后重开。");
         }
     }
@@ -113,16 +122,6 @@ public class MainActivity extends Activity {
     }
 
     protected void onActivityResult(int req, int res, Intent data) {
-        if (req == REQ_PERM) {
-            // 从「所有文件访问」设置页返回：若已授权则自动继续安装，否则再次弹窗询问。
-            if (safeIsExternalStorageManager()) {
-                setStatus("已获得权限，开始处理...");
-                new Thread(this::installBundled).start();
-            } else {
-                showAllFilesPermissionDialog();
-            }
-            return;
-        }
         if (req == REQ_PICK && res == RESULT_OK && data != null) {
             List<Uri> uris = new ArrayList<>();
             if (data.getData() != null) uris.add(data.getData());
