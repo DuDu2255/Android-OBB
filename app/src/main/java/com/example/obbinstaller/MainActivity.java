@@ -28,9 +28,11 @@ import java.util.List;
 public class MainActivity extends Activity {
     static final String AUTHORITY = "com.example.obbinstaller.fileprovider";
     static final int REQ_PICK = 1001;
+    static final int REQ_INSTALL = 1002;
     TextView tv;
     ProgressBar pb;
     private boolean started = false;
+    private volatile Runnable pendingAfterInstall;
 
     protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -118,6 +120,7 @@ public class MainActivity extends Activity {
         i.addCategory(Intent.CATEGORY_OPENABLE);
         i.setType("*/*");
         i.putExtra(Intent.EXTRA_ALLOW_MULTIPLE, true);
+        i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
         try { startActivityForResult(i, REQ_PICK); } catch (Throwable t) { showError(t); }
     }
 
@@ -129,7 +132,20 @@ public class MainActivity extends Activity {
                 for (int i = 0; i < data.getClipData().getItemCount(); i++)
                     uris.add(data.getClipData().getItemAt(i).getUri());
             }
+            for (Uri uri : uris) {
+                try {
+                    getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                } catch (Exception ignored) {}
+            }
             new Thread(() -> handlePicked(uris)).start();
+        } else if (req == REQ_INSTALL) {
+            Runnable afterInstall = pendingAfterInstall;
+            pendingAfterInstall = null;
+            if (res == RESULT_OK && afterInstall != null) {
+                new Thread(afterInstall).start();
+            } else {
+                setStatus("游戏 APK 未安装，已取消复制 OBB。");
+            }
         } else super.onActivityResult(req, res, data);
     }
 
@@ -169,21 +185,28 @@ public class MainActivity extends Activity {
                 setStatus("未发现打包的素材。请点击下方「选择 APK 和 OBB」按钮，从手机里选择文件。");
                 return;
             }
+            if (gameApk == null) {
+                setStatus("未找到游戏 APK，无法先安装游戏再复制 OBB。");
+                return;
+            }
+            File apk = new File(getCacheDir(), "game.apk");
+            setStatus("正在取出游戏 APK 并调起安装...");
+            copyAsset(am, gameApk, apk);
+            installApk(apk, () -> copyBundledObbs(am, obbs));
+        } catch (Exception e) { setStatus("出错：" + e); }
+    }
+
+    void copyBundledObbs(AssetManager am, List<String> obbs) {
+        try {
             for (String obb : obbs) {
                 String dest = obbDest(obb);
-                setStatus("正在解压 OBB -> " + dest);
+                setStatus("游戏安装完成，正在解压 OBB -> " + dest);
                 setIndeterminate(false);
                 copyAsset(am, obb, new File(dest));
                 updateProgress(100);
             }
-            if (gameApk != null) {
-                File apk = new File(getCacheDir(), "game.apk");
-                setStatus("正在取出游戏 APK 并调起安装...");
-                copyAsset(am, gameApk, apk);
-                installApk(apk);
-            }
-            setStatus("完成：OBB 已就位，游戏已调起安装。");
-        } catch (Exception e) { setStatus("出错：" + e); }
+            setStatus(obbs.isEmpty() ? "完成：游戏已安装，未发现 OBB。" : "完成：游戏和 OBB 已安装。");
+        } catch (Exception e) { setStatus("游戏已安装，但复制 OBB 出错：" + e); }
     }
 
     void collectAssets(AssetManager am, String path, List<String> out) {
@@ -205,27 +228,40 @@ public class MainActivity extends Activity {
     void handlePicked(List<Uri> uris) {
         try {
             File apk = null;
-            String obbMsg = "";
+            List<Uri> obbs = new ArrayList<>();
             for (Uri u : uris) {
                 String name = docName(u);
                 if (name.endsWith(".obb")) {
-                    String dest = obbDest(name);
-                    File f = new File(dest);
-                    f.getParentFile().mkdirs();
-                    setStatus("正在解压 OBB -> " + dest);
-                    setIndeterminate(false);
-                    copyUri(u, f);
-                    updateProgress(100);
-                    obbMsg = f.getParent();
+                    obbs.add(u);
                 } else if (name.endsWith(".apk")) {
                     apk = new File(getCacheDir(), "game.apk");
                     setStatus("正在取出游戏 APK...");
                     copyUri(u, apk);
                 }
             }
-            if (apk != null) installApk(apk);
-            setStatus("完成：OBB 已就位" + (obbMsg.isEmpty() ? "" : (" 路径 " + obbMsg)) + "，游戏已调起安装。");
+            if (apk == null) {
+                setStatus("未选择游戏 APK，无法先安装游戏再复制 OBB。");
+                return;
+            }
+            installApk(apk, () -> copyPickedObbs(obbs));
         } catch (Exception e) { setStatus("出错：" + e); }
+    }
+
+    void copyPickedObbs(List<Uri> obbs) {
+        try {
+            String obbMsg = "";
+            for (Uri u : obbs) {
+                String name = docName(u);
+                String dest = obbDest(name);
+                File f = new File(dest);
+                setStatus("游戏安装完成，正在复制 OBB -> " + dest);
+                setIndeterminate(false);
+                copyUri(u, f);
+                updateProgress(100);
+                obbMsg = f.getParent();
+            }
+            setStatus("完成：游戏已安装" + (obbMsg.isEmpty() ? "，未选择 OBB。" : ("，OBB 已复制到 " + obbMsg)));
+        } catch (Exception e) { setStatus("游戏已安装，但复制 OBB 出错：" + e); }
     }
 
     String docName(Uri u) {
@@ -267,13 +303,21 @@ public class MainActivity extends Activity {
             if (total > 0) updateProgress((int)(done * 100 / total));
         }
     }
-    void installApk(File apk) {
-        try {
-            Intent i = new Intent(Intent.ACTION_INSTALL_PACKAGE);
-            i.setData(FileProvider.getUriForFile(this, AUTHORITY, apk));
-            i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            startActivity(i);
-        } catch (Throwable t) { setStatus("调起安装失败：" + t); }
+    void installApk(File apk, Runnable afterInstall) {
+        runOnUiThread(() -> {
+            try {
+                pendingAfterInstall = afterInstall;
+                Intent i = new Intent(Intent.ACTION_INSTALL_PACKAGE);
+                i.setData(FileProvider.getUriForFile(this, AUTHORITY, apk));
+                i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
+                i.putExtra(Intent.EXTRA_RETURN_RESULT, true);
+                setStatus("请完成游戏 APK 安装，安装成功后将自动复制 OBB。");
+                startActivityForResult(i, REQ_INSTALL);
+            } catch (Throwable t) {
+                pendingAfterInstall = null;
+                setStatus("调起安装失败：" + t);
+            }
+        });
     }
     void setStatus(final String s) { runOnUiThread(() -> { if (tv != null) tv.setText(s); }); }
     void updateProgress(final int p) { runOnUiThread(() -> { if (pb != null) { pb.setIndeterminate(false); pb.setProgress(p); } }); }
