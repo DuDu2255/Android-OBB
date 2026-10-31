@@ -15,13 +15,12 @@ jobs:
         with:
           distribution: temurin
           java-version: 17
-      - name: Setup Android SDK
-        uses: android-actions/setup-android@v3
-      - name: Accept licenses and install SDK components
+      - name: Accept SDK licenses and install platform/build-tools
         run: |
-          SDK="${ANDROID_HOME:-$HOME/android-sdk}"
+          SDK=/usr/local/lib/android/sdk
           yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" --licenses >/dev/null
-          yes | "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-33" "build-tools;33.0.2" "platform-tools" >/dev/null
+          "$SDK/cmdline-tools/latest/bin/sdkmanager" "platforms;android-33" "build-tools;34.0.0" "platform-tools"
+          echo "ANDROID_HOME=$SDK" >> "$GITHUB_ENV"
       - name: Build Debug APK
         uses: gradle/gradle-build-action@v3
         with:
