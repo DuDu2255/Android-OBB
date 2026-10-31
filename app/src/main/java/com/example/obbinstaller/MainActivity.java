@@ -3,6 +3,8 @@ package com.example.obbinstaller;
 import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
+import android.content.ClipData;
+import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
@@ -14,10 +16,13 @@ import android.os.Build;
 import android.os.Bundle;
 import android.os.Environment;
 import android.provider.OpenableColumns;
+import android.system.ErrnoException;
+import android.system.Os;
 import android.provider.Settings;
 import android.widget.Button;
 import android.widget.LinearLayout;
 import android.widget.ProgressBar;
+import android.widget.ScrollView;
 import android.widget.TextView;
 import androidx.core.content.FileProvider;
 import java.io.File;
@@ -27,6 +32,7 @@ import java.io.InputStream;
 import java.io.OutputStream;
 import java.util.ArrayList;
 import java.util.List;
+import java.nio.charset.StandardCharsets;
 
 public class MainActivity extends Activity {
     static final String AUTHORITY = "com.example.obbinstaller.fileprovider";
@@ -37,9 +43,12 @@ public class MainActivity extends Activity {
     ProgressBar pb;
     private boolean started = false;
     private boolean storagePermissionRequested = false;
+    TextView logView;
     private volatile Runnable pendingAfterInstall;
     private volatile String pendingPackageName;
 
+    private final Object logLock = new Object();
+    private final StringBuilder diagnosticLog = new StringBuilder();
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         try {
@@ -50,6 +59,9 @@ public class MainActivity extends Activity {
         }
         // 全局异常兜底：任何未捕获异常直接显示在界面，避免"闪退"
         Thread.setDefaultUncaughtExceptionHandler((th, ex) -> runOnUiThread(() -> showError(ex)));
+        File oldLog = diagnosticFile();
+        if (oldLog.exists()) oldLog.delete();
+        logEnvironment();
 
         if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) {
             // 未授予「所有文件访问」权限：弹出询问框，确认后跳系统设置页；启动逻辑交给 onResume 统一处理
@@ -62,6 +74,8 @@ public class MainActivity extends Activity {
     @Override
     protected void onResume() {
         super.onResume();
+        logDiagnostic("onResume: allFiles=" + safeIsExternalStorageManager()
+                + ", started=" + started + ", pendingInstall=" + (pendingAfterInstall != null));
         // Winlator 同款思路：从设置页返回后再次检查；已获权限则启动安装（仅一次），未获授权则等待用户去设置
         if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) return;
         if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 32
@@ -90,6 +104,9 @@ public class MainActivity extends Activity {
         super.onRequestPermissionsResult(requestCode, permissions, grantResults);
         if (requestCode != REQ_STORAGE) return;
         storagePermissionRequested = false;
+        logDiagnostic("storagePermissionResult: WRITE_EXTERNAL_STORAGE="
+                + (Build.VERSION.SDK_INT < 23
+                || checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED));
         if (Build.VERSION.SDK_INT < 23
                 || checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
             startBundledOnce();
@@ -109,13 +126,77 @@ public class MainActivity extends Activity {
         Button btn = new Button(this);
         btn.setText("选择 APK 和 OBB");
         btn.setOnClickListener(v -> pickFiles());
+        Button logButton = new Button(this);
+        logButton.setText("复制诊断日志");
+        logButton.setOnClickListener(v -> copyDiagnosticLog());
+        logView = new TextView(this);
+        logView.setTextIsSelectable(true);
+        logView.setTextSize(11);
         LinearLayout ll = new LinearLayout(this);
         ll.setOrientation(LinearLayout.VERTICAL);
         ll.setPadding(40, 40, 40, 40);
         ll.addView(tv);
         ll.addView(pb);
         ll.addView(btn);
-        setContentView(ll);
+        ll.addView(logButton);
+        ll.addView(logView);
+        ScrollView scroll = new ScrollView(this);
+        scroll.addView(ll);
+        setContentView(scroll);
+    }
+
+    File diagnosticFile() {
+        File dir = getExternalFilesDir(null);
+        if (dir == null) dir = getFilesDir();
+        return new File(dir, "obb-installer-diagnostic.log");
+    }
+
+    void logDiagnostic(String message) {
+        String line = System.currentTimeMillis() + " | " + message + "\n";
+        String snapshot;
+        synchronized (logLock) {
+            diagnosticLog.append(line);
+            snapshot = diagnosticLog.toString();
+            try (FileOutputStream out = new FileOutputStream(diagnosticFile(), true)) {
+                out.write(line.getBytes(StandardCharsets.UTF_8));
+            } catch (Exception ignored) {}
+        }
+        if (logView != null) runOnUiThread(() -> logView.setText(snapshot));
+    }
+
+    void logEnvironment() {
+        int writePermission = Build.VERSION.SDK_INT < 23
+                ? PackageManager.PERMISSION_GRANTED
+                : checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
+        logDiagnostic("appVersion=1.2(3), sdk=" + Build.VERSION.SDK_INT
+                + ", android=" + Build.VERSION.RELEASE
+                + ", device=" + Build.MANUFACTURER + " " + Build.MODEL
+                + ", targetSdk=" + getApplicationInfo().targetSdkVersion);
+        logDiagnostic("isExternalStorageManager=" + safeIsExternalStorageManager()
+                + ", WRITE_EXTERNAL_STORAGE=" + (writePermission == PackageManager.PERMISSION_GRANTED));
+        File root = Environment.getExternalStorageDirectory();
+        logDiagnostic(describeFile("externalRoot", root));
+        logDiagnostic(describeFile("Android", new File(root, "Android")));
+        logDiagnostic(describeFile("Android/obb", new File(root, "Android/obb")));
+        logDiagnostic("logFile=" + diagnosticFile().getAbsolutePath());
+    }
+
+    String describeFile(String label, File file) {
+        return label + "=" + file.getAbsolutePath()
+                + " {exists=" + file.exists()
+                + ", directory=" + file.isDirectory()
+                + ", readable=" + file.canRead()
+                + ", writable=" + file.canWrite() + "}";
+    }
+
+    void copyDiagnosticLog() {
+        ClipboardManager clipboard = (ClipboardManager) getSystemService(CLIPBOARD_SERVICE);
+        String text;
+        synchronized (logLock) { text = diagnosticLog.toString(); }
+        if (clipboard != null) {
+            clipboard.setPrimaryClip(ClipData.newPlainText("OBB 安装器诊断日志", text));
+            toast("诊断日志已复制");
+        }
     }
 
     boolean safeIsExternalStorageManager() {
@@ -181,6 +262,8 @@ public class MainActivity extends Activity {
         Runnable afterInstall = pendingAfterInstall;
         String packageName = pendingPackageName;
         boolean installed = resultCode == RESULT_OK || waitForPackageInstalled(packageName);
+        logDiagnostic("installResult: resultCode=" + resultCode + ", package=" + packageName
+                + ", detectedInstalled=" + installed);
         pendingAfterInstall = null;
         pendingPackageName = null;
         if (installed && afterInstall != null) {
@@ -288,6 +371,7 @@ public class MainActivity extends Activity {
             List<Uri> obbs = new ArrayList<>();
             for (Uri u : uris) {
                 String name = docName(u);
+                logDiagnostic("pickedFile: name=" + name + ", uri=" + u);
                 if (name.endsWith(".obb")) {
                     obbs.add(u);
                 } else if (name.endsWith(".apk")) {
@@ -329,10 +413,39 @@ public class MainActivity extends Activity {
         return n == null ? "file.obb" : n;
     }
 
+    void ensureDirectory(File dir) throws IOException {
+        logDiagnostic("ensureDirectory: " + describeFile("target", dir));
+        if (dir.exists()) {
+            if (!dir.isDirectory()) throw new IOException("目标路径存在但不是目录: " + dir);
+            return;
+        }
+        File ancestor = dir.getParentFile();
+        if (ancestor != null && !ancestor.exists()) ensureDirectory(ancestor);
+        if (ancestor != null) logDiagnostic(describeFile("parent", ancestor));
+        try {
+            Os.mkdir(dir.getAbsolutePath(), 0775);
+            logDiagnostic("Os.mkdir success: " + dir);
+        } catch (ErrnoException e) {
+            logDiagnostic("Os.mkdir failed: path=" + dir + ", errno=" + e.errno
+                    + ", detail=" + e.getMessage());
+            if (!dir.isDirectory()) {
+                throw new IOException("无法创建目录: " + dir + "；errno=" + e.errno
+                        + " (" + e.getMessage() + ")。诊断日志可在界面复制。", e);
+            }
+        } catch (Throwable t) {
+            logDiagnostic("Os.mkdir unexpected failure: " + t);
+            if (!dir.mkdirs() && !dir.isDirectory()) {
+                throw new IOException("无法创建目录: " + dir + "；" + t
+                        + "。诊断日志可在界面复制。", t);
+            }
+        }
+        logDiagnostic("directory result: " + describeFile("target", dir));
+    }
+
     void copyAsset(AssetManager am, String asset, File out) throws Exception {
         File parent = out.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs())
-            throw new IOException("无法创建目录: " + parent + "（请确认已授予本应用「所有文件访问」权限，且存储可写）");
+        logDiagnostic("copyAsset: source=" + asset + ", destination=" + out);
+        if (parent != null) ensureDirectory(parent);
         long total = -1;
         try { total = am.openFd(asset).getLength(); } catch (Exception ignored) {}
         InputStream in = am.open(asset);
@@ -342,10 +455,12 @@ public class MainActivity extends Activity {
     }
     void copyUri(Uri u, File out) throws Exception {
         File parent = out.getParentFile();
-        if (parent != null && !parent.exists() && !parent.mkdirs())
-            throw new IOException("无法创建目录: " + parent + "（请确认已授予本应用「所有文件访问」权限，且存储可写）");
+        logDiagnostic("copyUri: source=" + u + ", destination=" + out);
+        if (parent != null) ensureDirectory(parent);
         long total = -1;
         try { total = getContentResolver().openFileDescriptor(u, "r").getStatSize(); } catch (Exception ignored) {}
+        logDiagnostic("copyUri: sourceSize=" + total + ", parent="
+                + (parent == null ? "null" : describeFile("target", parent)));
         InputStream in = getContentResolver().openInputStream(u);
         FileOutputStream fo = new FileOutputStream(out);
         pipe(in, fo, total);
@@ -366,6 +481,8 @@ public class MainActivity extends Activity {
                 PackageInfo archiveInfo = getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
                 pendingAfterInstall = afterInstall;
                 pendingPackageName = archiveInfo == null ? null : archiveInfo.packageName;
+                logDiagnostic("installApk: apk=" + apk + ", parsedPackage=" + pendingPackageName
+                        + ", size=" + apk.length());
                 Intent i = new Intent(Intent.ACTION_INSTALL_PACKAGE);
                 i.setData(FileProvider.getUriForFile(this, AUTHORITY, apk));
                 i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -379,11 +496,15 @@ public class MainActivity extends Activity {
             }
         });
     }
-    void setStatus(final String s) { runOnUiThread(() -> { if (tv != null) tv.setText(s); }); }
+    void setStatus(final String s) {
+        logDiagnostic("STATUS: " + s);
+        runOnUiThread(() -> { if (tv != null) tv.setText(s); });
+    }
     void updateProgress(final int p) { runOnUiThread(() -> { if (pb != null) { pb.setIndeterminate(false); pb.setProgress(p); } }); }
     void setIndeterminate(final boolean ind) { runOnUiThread(() -> { if (pb != null) pb.setIndeterminate(ind); }); }
     void showError(Throwable t) {
         String msg = "发生错误（已避免闪退）：\n" + (t == null ? "未知" : t.toString());
+        logDiagnostic("UNCAUGHT: " + msg);
         if (tv != null) tv.setText(msg);
         else { TextView t2 = new TextView(this); t2.setText(msg); setContentView(t2); }
     }
