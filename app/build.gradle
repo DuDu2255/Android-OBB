@@ -34,6 +34,7 @@ tasks.register('generatePayloadDex') {
         output.mkdirs()
         exec {
             commandLine "${android.sdkDirectory}/build-tools/34.0.0/d8",
+                    '--lib', "${android.sdkDirectory}/platforms/android-34/android.jar",
                     '--min-api', '21',
                     '--output', output.absolutePath,
                     inputJar.absolutePath
@@ -47,5 +48,6 @@ dependencies {
     implementation 'androidx.documentfile:documentfile:1.0.1'
     implementation 'net.dongliu:apk-parser:2.6.10'
     implementation 'org.smali:dexlib2:2.5.2'
+    implementation 'com.google.guava:guava:27.1-android'
     implementation 'com.android.tools.build:apksig:8.2.0'
 }
