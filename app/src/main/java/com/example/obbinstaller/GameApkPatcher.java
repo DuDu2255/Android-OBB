@@ -3,6 +3,11 @@ package com.example.obbinstaller;
 import android.content.Context;
 import android.security.KeyPairGeneratorSpec;
 import com.android.apksig.ApkSigner;
+import com.android.zipflinger.BytesSource;
+import com.android.zipflinger.Entry;
+import com.android.zipflinger.ZipArchive;
+import com.android.zipflinger.ZipSource;
+import java.util.zip.Deflater;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.FileOutputStream;
@@ -23,7 +28,6 @@ import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipFile;
-import java.util.zip.ZipOutputStream;
 import javax.security.auth.x500.X500Principal;
 import javax.xml.parsers.DocumentBuilderFactory;
 import net.dongliu.apk.parser.ApkFile;
@@ -308,32 +312,29 @@ final class GameApkPatcher {
                     maxDex = Math.max(maxDex, number.isEmpty() ? 1 : Integer.parseInt(number));
                 }
             }
-            String payloadName = "classes" + (maxDex + 1) + ".dex";
-            try (ZipOutputStream out = new ZipOutputStream(new FileOutputStream(output))) {
-                Enumeration<? extends ZipEntry> entries = zip.entries();
-                Set<String> written = new HashSet<>();
-                while (entries.hasMoreElements()) {
-                    ZipEntry original = entries.nextElement();
-                    String name = original.getName();
-                    if (isOldSignature(name) || payloadName.equals(name)) continue;
-                    ZipEntry replacement = new ZipEntry(name);
-                    replacement.setTime(original.getTime());
-                    out.putNextEntry(replacement);
-                    if (patchedDexName.equals(name)) out.write(patchedDex);
-                    else copy(zip.getInputStream(original), out);
-                    out.closeEntry();
-                    written.add(name);
-                }
-                if (!written.contains(patchedDexName)) {
-                    throw new IOException("重打包时未找到待替换 DEX");
-                }
-                ZipEntry payloadEntry = new ZipEntry(payloadName);
-                out.putNextEntry(payloadEntry);
-                out.write(payloadDex);
-                out.closeEntry();
-                logger.log("载荷 DEX 已加入为 " + payloadName);
-            }
         }
+        String payloadName = "classes" + (maxDex + 1) + ".dex";
+        if (output.exists() && !output.delete()) {
+            throw new IOException("无法清理旧的临时 APK");
+        }
+        ZipSource source = new ZipSource(input.toPath());
+        for (Entry entry : source.entries().values()) {
+            String name = entry.getName();
+            if (isOldSignature(name) || patchedDexName.equals(name)
+                    || payloadName.equals(name)) continue;
+            long alignment = entry.isCompressed() || entry.isDirectory()
+                    ? 0 : (name.startsWith("lib/") && name.endsWith(".so") ? 4096 : 4);
+            source.select(name, name, ZipSource.COMPRESSION_NO_CHANGE, alignment);
+        }
+        try (ZipArchive archive = new ZipArchive(output)) {
+            archive.add(source);
+            archive.add(new BytesSource(
+                    patchedDex, patchedDexName, Deflater.DEFAULT_COMPRESSION));
+            archive.add(new BytesSource(
+                    payloadDex, payloadName, Deflater.DEFAULT_COMPRESSION));
+        }
+        logger.log("APK 已保留原压缩方式并完成原生库对齐");
+        logger.log("载荷 DEX 已加入为 " + payloadName);
     }
 
     private boolean isOldSignature(String name) {

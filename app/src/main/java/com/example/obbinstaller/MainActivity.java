@@ -8,6 +8,7 @@ import android.content.ClipboardManager;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
+import android.content.pm.PackageInstaller;
 import android.content.res.AssetManager;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
@@ -176,7 +177,7 @@ public class MainActivity extends Activity {
         int writePermission = Build.VERSION.SDK_INT < 23
                 ? PackageManager.PERMISSION_GRANTED
                 : checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        logDiagnostic("appVersion=2.0.1(6), sdk=" + Build.VERSION.SDK_INT
+        logDiagnostic("appVersion=2.0.2(7), sdk=" + Build.VERSION.SDK_INT
                 + ", android=" + Build.VERSION.RELEASE
                 + ", device=" + Build.MANUFACTURER + " " + Build.MODEL
                 + ", targetSdk=" + getApplicationInfo().targetSdkVersion);
@@ -262,7 +263,7 @@ public class MainActivity extends Activity {
             }
             new Thread(() -> handlePicked(uris)).start();
         } else if (req == REQ_INSTALL) {
-            new Thread(() -> finishInstall(res)).start();
+            new Thread(() -> finishInstall(res, data)).start();
         } else if (req == REQ_OBB_TREE && res == RESULT_OK && data != null && data.getData() != null) {
             Uri treeUri = data.getData();
             int flags = data.getFlags()
@@ -280,18 +281,26 @@ public class MainActivity extends Activity {
         } else super.onActivityResult(req, res, data);
     }
 
-    void finishInstall(int resultCode) {
+    void finishInstall(int resultCode, Intent data) {
         Runnable afterInstall = pendingAfterInstall;
         String packageName = pendingPackageName;
         boolean installed = resultCode == RESULT_OK || waitForPackageInstalled(packageName);
+        int packageStatus = data == null ? Integer.MIN_VALUE
+                : data.getIntExtra(PackageInstaller.EXTRA_STATUS, Integer.MIN_VALUE);
+        int legacyStatus = data == null ? Integer.MIN_VALUE
+                : data.getIntExtra(Intent.EXTRA_INSTALL_RESULT, Integer.MIN_VALUE);
+        String statusMessage = data == null ? null
+                : data.getStringExtra(PackageInstaller.EXTRA_STATUS_MESSAGE);
         logDiagnostic("installResult: resultCode=" + resultCode + ", package=" + packageName
-                + ", detectedInstalled=" + installed);
+                + ", detectedInstalled=" + installed + ", packageStatus=" + packageStatus
+                + ", legacyStatus=" + legacyStatus + ", message=" + statusMessage);
         pendingAfterInstall = null;
         pendingPackageName = null;
         if (installed && afterInstall != null) {
             afterInstall.run();
         } else {
-            setStatus("未检测到游戏 APK，请确认安装成功后重试。");
+            setStatus("修补版安装失败：result=" + resultCode + "，status=" + packageStatus
+                    + "，legacy=" + legacyStatus + "，" + statusMessage);
         }
     }
 
