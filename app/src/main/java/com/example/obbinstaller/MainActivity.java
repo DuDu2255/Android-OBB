@@ -1,6 +1,7 @@
 package com.example.obbinstaller;
 
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.res.AssetManager;
 import android.content.res.AssetFileDescriptor;
@@ -43,15 +44,8 @@ public class MainActivity extends Activity {
         Thread.setDefaultUncaughtExceptionHandler((th, ex) -> runOnUiThread(() -> showError(ex)));
 
         if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) {
-            Intent i = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION,
-                    Uri.parse("package:" + getPackageName()));
-            if (i.resolveActivity(getPackageManager()) != null) {
-                try { startActivityForResult(i, REQ_PERM); } catch (Throwable t) { showError(t); return; }
-            } else {
-                setStatus("无法打开“所有文件访问”设置页，请手动到系统设置授予本应用“所有文件访问”权限后重开。");
-                return;
-            }
-            toast("请在此页面授予「所有文件访问」权限，返回后会自动继续");
+            // 未授予「所有文件访问」权限：打开安装器时先弹窗询问，确认后再跳系统设置页
+            showAllFilesPermissionDialog();
             return;
         }
         new Thread(this::installBundled).start();
@@ -81,6 +75,27 @@ public class MainActivity extends Activity {
         try { return Environment.isExternalStorageManager(); } catch (Throwable t) { return false; }
     }
 
+    void showAllFilesPermissionDialog() {
+        // 打开安装器时弹出：是否允许「管理所有文件」权限
+        AlertDialog.Builder b = new AlertDialog.Builder(this);
+        b.setTitle("需要「管理所有文件」权限");
+        b.setMessage("本工具需要把 OBB 写入 /Android/obb 目录，必须授予「所有文件访问」权限才能继续。\n\n是否前往系统设置开启？");
+        b.setPositiveButton("去开启", (d, w) -> openAllFilesSettings());
+        b.setNegativeButton("退出", (d, w) -> finish());
+        b.setCancelable(false);
+        b.show();
+    }
+
+    void openAllFilesSettings() {
+        Intent i = new Intent(Settings.ACTION_MANAGE_ALL_FILES_ACCESS_PERMISSION,
+                Uri.parse("package:" + getPackageName()));
+        if (i.resolveActivity(getPackageManager()) != null) {
+            try { startActivityForResult(i, REQ_PERM); } catch (Throwable t) { showError(t); }
+        } else {
+            setStatus("无法打开“所有文件访问”设置页，请手动到系统设置授予本应用“所有文件访问”权限后重开。");
+        }
+    }
+
     void pickFiles() {
         Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
         i.addCategory(Intent.CATEGORY_OPENABLE);
@@ -91,12 +106,12 @@ public class MainActivity extends Activity {
 
     protected void onActivityResult(int req, int res, Intent data) {
         if (req == REQ_PERM) {
-            // 从「所有文件访问」设置页返回：若已授权则自动继续安装，否则提示。
+            // 从「所有文件访问」设置页返回：若已授权则自动继续安装，否则再次弹窗询问。
             if (safeIsExternalStorageManager()) {
                 setStatus("已获得权限，开始处理...");
                 new Thread(this::installBundled).start();
             } else {
-                setStatus("尚未授予「所有文件访问」权限，无法写入 OBB 目录。请到系统设置手动授予后重开本程序。");
+                showAllFilesPermissionDialog();
             }
             return;
         }
