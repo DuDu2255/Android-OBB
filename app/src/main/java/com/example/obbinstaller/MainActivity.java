@@ -1,9 +1,11 @@
 package com.example.obbinstaller;
 
+import android.Manifest;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
 import android.content.pm.PackageInfo;
+import android.content.pm.PackageManager;
 import android.content.res.AssetManager;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
@@ -30,9 +32,11 @@ public class MainActivity extends Activity {
     static final String AUTHORITY = "com.example.obbinstaller.fileprovider";
     static final int REQ_PICK = 1001;
     static final int REQ_INSTALL = 1002;
+    static final int REQ_STORAGE = 1003;
     TextView tv;
     ProgressBar pb;
     private boolean started = false;
+    private boolean storagePermissionRequested = false;
     private volatile Runnable pendingAfterInstall;
     private volatile String pendingPackageName;
 
@@ -60,9 +64,37 @@ public class MainActivity extends Activity {
         super.onResume();
         // Winlator 同款思路：从设置页返回后再次检查；已获权限则启动安装（仅一次），未获授权则等待用户去设置
         if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) return;
+        if (Build.VERSION.SDK_INT >= 23 && Build.VERSION.SDK_INT <= 32
+                && checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) != PackageManager.PERMISSION_GRANTED) {
+            if (!storagePermissionRequested) {
+                storagePermissionRequested = true;
+                requestPermissions(new String[]{
+                        Manifest.permission.READ_EXTERNAL_STORAGE,
+                        Manifest.permission.WRITE_EXTERNAL_STORAGE
+                }, REQ_STORAGE);
+            }
+            return;
+        }
+        startBundledOnce();
+    }
+
+    void startBundledOnce() {
         if (!started) {
             started = true;
             new Thread(this::installBundled).start();
+        }
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int requestCode, String[] permissions, int[] grantResults) {
+        super.onRequestPermissionsResult(requestCode, permissions, grantResults);
+        if (requestCode != REQ_STORAGE) return;
+        storagePermissionRequested = false;
+        if (Build.VERSION.SDK_INT < 23
+                || checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE) == PackageManager.PERMISSION_GRANTED) {
+            startBundledOnce();
+        } else {
+            setStatus("未授予存储权限，无法复制 OBB。");
         }
     }
 
