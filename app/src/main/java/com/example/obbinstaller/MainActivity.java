@@ -133,7 +133,7 @@ public class MainActivity extends Activity {
                 setStatus("正在解压 OBB -> " + dest);
                 setIndeterminate(false);
                 copyAsset(am, obb, new File(dest));
-                setProgress(100);
+                updateProgress(100);
             }
             if (gameApk != null) {
                 File apk = new File(getCacheDir(), "game.apk");
@@ -174,7 +174,7 @@ public class MainActivity extends Activity {
                     setStatus("正在解压 OBB -> " + dest);
                     setIndeterminate(false);
                     copyUri(u, f);
-                    setProgress(100);
+                    updateProgress(100);
                     obbMsg = f.getParent();
                 } else if (name.endsWith(".apk")) {
                     apk = new File(getCacheDir(), "game.apk");
@@ -207,7 +207,7 @@ public class MainActivity extends Activity {
     void copyUri(Uri u, File out) throws Exception {
         out.getParentFile().mkdirs();
         long total = -1;
-        try { total = getContentResolver().openFileDescriptor(u, "r").getLength(); } catch (Exception ignored) {}
+        try { total = getContentResolver().openFileDescriptor(u, "r").getStatSize(); } catch (Exception ignored) {}
         InputStream in = getContentResolver().openInputStream(u);
         FileOutputStream fo = new FileOutputStream(out);
         pipe(in, fo, total);
@@ -219,7 +219,7 @@ public class MainActivity extends Activity {
         while ((n = in.read(buf)) > 0) {
             out.write(buf, 0, n);
             done += n;
-            if (total > 0) setProgress((int)(done * 100 / total));
+            if (total > 0) updateProgress((int)(done * 100 / total));
         }
     }
     void installApk(File apk) {
@@ -231,7 +231,7 @@ public class MainActivity extends Activity {
         } catch (Throwable t) { setStatus("调起安装失败：" + t); }
     }
     void setStatus(final String s) { runOnUiThread(() -> { if (tv != null) tv.setText(s); }); }
-    void setProgress(final int p) { runOnUiThread(() -> { if (pb != null) { pb.setIndeterminate(false); pb.setProgress(p); } }); }
+    void updateProgress(final int p) { runOnUiThread(() -> { if (pb != null) { pb.setIndeterminate(false); pb.setProgress(p); } }); }
     void setIndeterminate(final boolean ind) { runOnUiThread(() -> { if (pb != null) pb.setIndeterminate(ind); }); }
     void showError(Throwable t) {
         String msg = "发生错误（已避免闪退）：\n" + (t == null ? "未知" : t.toString());
