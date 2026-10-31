@@ -25,10 +25,9 @@ jobs:
         uses: gradle/gradle-build-action@v3
         with:
           gradle-version: 8.1
-          build-root: installer_app
           arguments: :app:assembleDebug
       - name: Upload APK
         uses: actions/upload-artifact@v4
         with:
           name: installer-apk
-          path: installer_app/app/build/outputs/apk/debug/*.apk
+          path: app/build/outputs/apk/debug/*.apk
