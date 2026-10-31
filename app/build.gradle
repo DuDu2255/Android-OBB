@@ -25,13 +25,15 @@ tasks.register('generatePayloadDex') {
     outputs.dir payloadDexDir
     doLast {
         def output = payloadDexDir.get().asFile
+        def input = project(':payload').tasks.getByName('compileDebugJavaWithJavac')
+                .destinationDirectory.get().asFile
         delete output
         output.mkdirs()
         exec {
             commandLine "${android.sdkDirectory}/build-tools/34.0.0/d8",
                     '--min-api', '21',
                     '--output', output.absolutePath,
-                    "${rootProject.projectDir}/payload/build/intermediates/javac/debug/compileDebugJavaWithJavac/classes"
+                    input.absolutePath
         }
     }
 }
