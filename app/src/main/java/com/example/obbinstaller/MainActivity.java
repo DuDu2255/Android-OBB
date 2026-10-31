@@ -5,7 +5,10 @@ import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.ClipData;
 import android.content.ClipboardManager;
+import android.content.BroadcastReceiver;
+import android.content.Context;
 import android.content.Intent;
+import android.content.IntentFilter;
 import android.content.pm.PackageInfo;
 import android.content.pm.PackageManager;
 import android.content.pm.PackageInstaller;
@@ -58,6 +61,17 @@ public class MainActivity extends Activity {
     private volatile List<Uri> pendingPatchedObbs;
     private final Object logLock = new Object();
     private final StringBuilder diagnosticLog = new StringBuilder();
+    private final BroadcastReceiver payloadStatusReceiver = new BroadcastReceiver() {
+        @Override public void onReceive(Context context, Intent intent) {
+            String stage = intent.getStringExtra("com.example.obbinstaller.OBB_STAGE");
+            String message = intent.getStringExtra("com.example.obbinstaller.OBB_MESSAGE");
+            logDiagnostic("PAYLOAD[" + stage + "]: " + message);
+            if ("error".equals(stage)) setStatus("修补版复制 OBB 失败：" + message);
+            else if ("complete".equals(stage)) setStatus("完成：" + message);
+        }
+    };
+    private boolean payloadReceiverRegistered;
+
     protected void onCreate(Bundle b) {
         super.onCreate(b);
         try {
@@ -71,6 +85,13 @@ public class MainActivity extends Activity {
         File oldLog = diagnosticFile();
         if (oldLog.exists()) oldLog.delete();
         logEnvironment();
+        IntentFilter payloadFilter = new IntentFilter("com.example.obbinstaller.OBB_STATUS");
+        if (Build.VERSION.SDK_INT >= 33) {
+            registerReceiver(payloadStatusReceiver, payloadFilter, Context.RECEIVER_EXPORTED);
+        } else {
+            registerReceiver(payloadStatusReceiver, payloadFilter);
+        }
+        payloadReceiverRegistered = true;
 
         if (Build.VERSION.SDK_INT >= 30 && !safeIsExternalStorageManager()) {
             // 未授予「所有文件访问」权限：弹出询问框，确认后跳系统设置页；启动逻辑交给 onResume 统一处理
@@ -78,6 +99,15 @@ public class MainActivity extends Activity {
             return;
         }
         // 已授权（或 Android 10 及以下）：交给 onResume 启动安装
+    }
+
+    @Override
+    protected void onDestroy() {
+        if (payloadReceiverRegistered) {
+            unregisterReceiver(payloadStatusReceiver);
+            payloadReceiverRegistered = false;
+        }
+        super.onDestroy();
     }
 
     @Override
@@ -177,7 +207,7 @@ public class MainActivity extends Activity {
         int writePermission = Build.VERSION.SDK_INT < 23
                 ? PackageManager.PERMISSION_GRANTED
                 : checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        logDiagnostic("appVersion=2.0.2(7), sdk=" + Build.VERSION.SDK_INT
+        logDiagnostic("appVersion=2.0.3(8), sdk=" + Build.VERSION.SDK_INT
                 + ", android=" + Build.VERSION.RELEASE
                 + ", device=" + Build.MANUFACTURER + " " + Build.MODEL
                 + ", targetSdk=" + getApplicationInfo().targetSdkVersion);
