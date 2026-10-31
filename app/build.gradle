@@ -21,7 +21,7 @@ android {
 
 def payloadDexDir = layout.buildDirectory.dir('generated/payloadDex')
 tasks.register('generatePayloadDex') {
-    dependsOn ':payload:bundleLibRuntimeToJarDebug'
+    dependsOn ':payload:compileDebugJavaWithJavac'
     outputs.dir payloadDexDir
     doLast {
         def output = payloadDexDir.get().asFile
@@ -31,7 +31,7 @@ tasks.register('generatePayloadDex') {
             commandLine "${android.sdkDirectory}/build-tools/34.0.0/d8",
                     '--min-api', '21',
                     '--output', output.absolutePath,
-                    "${rootProject.projectDir}/payload/build/intermediates/runtime_library_classes_jar/debug/bundleLibRuntimeToJarDebug/classes.jar"
+                    "${rootProject.projectDir}/payload/build/intermediates/javac/debug/classes"
         }
     }
 }
