@@ -3,6 +3,7 @@ package com.example.obbinstaller;
 import android.app.Activity;
 import android.app.AlertDialog;
 import android.content.Intent;
+import android.content.pm.PackageInfo;
 import android.content.res.AssetManager;
 import android.content.res.AssetFileDescriptor;
 import android.database.Cursor;
@@ -33,6 +34,7 @@ public class MainActivity extends Activity {
     ProgressBar pb;
     private boolean started = false;
     private volatile Runnable pendingAfterInstall;
+    private volatile String pendingPackageName;
 
     protected void onCreate(Bundle b) {
         super.onCreate(b);
@@ -139,14 +141,37 @@ public class MainActivity extends Activity {
             }
             new Thread(() -> handlePicked(uris)).start();
         } else if (req == REQ_INSTALL) {
-            Runnable afterInstall = pendingAfterInstall;
-            pendingAfterInstall = null;
-            if (res == RESULT_OK && afterInstall != null) {
-                new Thread(afterInstall).start();
-            } else {
-                setStatus("游戏 APK 未安装，已取消复制 OBB。");
-            }
+            new Thread(() -> finishInstall(res)).start();
         } else super.onActivityResult(req, res, data);
+    }
+
+    void finishInstall(int resultCode) {
+        Runnable afterInstall = pendingAfterInstall;
+        String packageName = pendingPackageName;
+        boolean installed = resultCode == RESULT_OK || waitForPackageInstalled(packageName);
+        pendingAfterInstall = null;
+        pendingPackageName = null;
+        if (installed && afterInstall != null) {
+            afterInstall.run();
+        } else {
+            setStatus("未检测到游戏 APK，请确认安装成功后重试。");
+        }
+    }
+
+    boolean waitForPackageInstalled(String packageName) {
+        if (packageName == null || packageName.isEmpty()) return false;
+        for (int i = 0; i < 10; i++) {
+            try {
+                getPackageManager().getPackageInfo(packageName, 0);
+                return true;
+            } catch (Exception ignored) {}
+            try { Thread.sleep(500); }
+            catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                return false;
+            }
+        }
+        return false;
     }
 
     String extRoot() {
@@ -306,7 +331,9 @@ public class MainActivity extends Activity {
     void installApk(File apk, Runnable afterInstall) {
         runOnUiThread(() -> {
             try {
+                PackageInfo archiveInfo = getPackageManager().getPackageArchiveInfo(apk.getAbsolutePath(), 0);
                 pendingAfterInstall = afterInstall;
+                pendingPackageName = archiveInfo == null ? null : archiveInfo.packageName;
                 Intent i = new Intent(Intent.ACTION_INSTALL_PACKAGE);
                 i.setData(FileProvider.getUriForFile(this, AUTHORITY, apk));
                 i.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION);
@@ -315,6 +342,7 @@ public class MainActivity extends Activity {
                 startActivityForResult(i, REQ_INSTALL);
             } catch (Throwable t) {
                 pendingAfterInstall = null;
+                pendingPackageName = null;
                 setStatus("调起安装失败：" + t);
             }
         });
