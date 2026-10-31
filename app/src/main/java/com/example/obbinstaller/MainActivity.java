@@ -176,7 +176,7 @@ public class MainActivity extends Activity {
         int writePermission = Build.VERSION.SDK_INT < 23
                 ? PackageManager.PERMISSION_GRANTED
                 : checkSelfPermission(Manifest.permission.WRITE_EXTERNAL_STORAGE);
-        logDiagnostic("appVersion=2.0(5), sdk=" + Build.VERSION.SDK_INT
+        logDiagnostic("appVersion=2.0.1(6), sdk=" + Build.VERSION.SDK_INT
                 + ", android=" + Build.VERSION.RELEASE
                 + ", device=" + Build.MANUFACTURER + " " + Build.MODEL
                 + ", targetSdk=" + getApplicationInfo().targetSdkVersion);

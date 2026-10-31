@@ -108,7 +108,6 @@ final class GameApkPatcher {
     private String findLauncherActivity(String xml, String packageName) throws Exception {
         DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
         factory.setNamespaceAware(true);
-        factory.setFeature("http://apache.org/xml/features/disallow-doctype-decl", true);
         Document document = factory.newDocumentBuilder().parse(
                 new InputSource(new StringReader(xml)));
         NodeList activities = document.getElementsByTagName("activity");
